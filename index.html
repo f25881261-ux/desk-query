@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="zh-TW" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>桌號查詢系統</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap">
+
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      font-family: 'Noto Sans TC', system-ui, -apple-system, sans-serif;
+    }
+
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .slide-in { animation: slideIn 0.4s ease-out; }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+  </style>
+</head>
+
+<body class="h-full">
+  <div id="app" class="w-full h-full"></div>
+
+  <script>
+    // ====== 設定 ======
+    const config = {
+      background_color: '#0f172a',
+      surface_color: '#1e293b',
+      text_color: '#f1f5f9',
+      primary_action_color: '#3b82f6',
+      secondary_action_color: '#64748b',
+      font_family: 'Noto Sans TC',
+      font_size: 16,
+      app_title: '桌號查詢',
+      admin_title: '管理者後台',
+      query_button_text: '查詢 Search',
+      employee_id_label: '員工編號 Employee ID'
+    };
+
+    const ADMIN_PASSWORD = '8271';
+
+    let allEmployeeData = [];
+    let currentView = 'user';
+    let resultAutoClearTimer = null;
+
+    // ====== LocalStorage 資料管理 ======
+    function loadData() {
+      const data = localStorage.getItem('employeeData');
+      if (data) {
+        try {
+          allEmployeeData = JSON.parse(data);
+        } catch (e) {
+          allEmployeeData = [];
+        }
+      }
+    }
+
+    function saveData() {
+      localStorage.setItem('employeeData', JSON.stringify(allEmployeeData));
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function clearQueryResult() {
+      if (resultAutoClearTimer) {
+        clearTimeout(resultAutoClearTimer);
+        resultAutoClearTimer = null;
+      }
+      const resultArea = document.getElementById('resultArea');
+      if (resultArea) resultArea.innerHTML = '';
+    }
+
+    function init() {
+      loadData();
+      applyStyles();
+      renderCurrentView();
+    }
+
+    function applyStyles() {
+      const baseFontSize = config.font_size;
+      const customFont = config.font_family;
+      const fontStack = `${customFont}, system-ui, -apple-system, sans-serif`;
+
+      document.body.style.backgroundColor = config.background_color;
+      document.body.style.color = config.text_color;
+      document.body.style.fontFamily = fontStack;
+      document.body.style.fontSize = `${baseFontSize}px`;
+
+      const app = document.getElementById('app');
+      if (app) app.style.backgroundColor = config.background_color;
+    }
+
+    function renderCurrentView() {
+      const app = document.getElementById('app');
+      if (!app) return;
+
+      if (currentView !== 'user') {
+        clearQueryResult();
+      }
+
+      if (currentView === 'user') app.innerHTML = renderUserView();
+      else if (currentView === 'password') app.innerHTML = renderPasswordView();
+      else if (currentView === 'admin') app.innerHTML = renderAdminView();
+
+      attachEventListeners();
+    }
+
+    function renderUserView() {
+      const baseFontSize = config.font_size;
+      const backgroundColor = config.background_color;
+      const surfaceColor = config.surface_color;
+      const textColor = config.text_color;
+      const primaryColor = config.primary_action_color;
+      const secondaryColor = config.secondary_action_color;
+      const appTitle = config.app_title;
+      const queryButtonText = config.query_button_text;
+      const employeeIdLabel = config.employee_id_label;
+
+      return `
+        <div class="w-full h-full overflow-auto" style="background-color: ${backgroundColor};">
+          <div class="min-h-full flex items-center justify-center p-6">
+            <div class="w-full max-w-md">
+              <div class="text-center mb-8 fade-in">
+                <h1 style="font-size: ${baseFontSize * 2}px; color: ${textColor}; font-weight: 700;">${escapeHtml(appTitle)}</h1>
+                <h2 style="font-size: ${baseFontSize * 1.2}px; color: ${textColor}; font-weight: 500; margin-top: ${baseFontSize * 0.5}px;">Desk Query</h2>
+              </div>
+
+              <div class="slide-in" style="background-color: ${surfaceColor}; padding: ${baseFontSize * 2}px; border-radius: ${baseFontSize * 0.75}px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <form id="queryForm">
+                  <label for="employeeIdInput" style="display:block; font-size:${baseFontSize}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 0.5}px;">
+                    ${escapeHtml(employeeIdLabel)} (最多7位數字 max 7 digits)
+                  </label>
+
+                  <input
+                    type="text"
+                    id="employeeIdInput"
+                    placeholder="例如 / e.g.: 1234567"
+                    autocomplete="off"
+                    style="width:100%; padding:${baseFontSize * 0.75}px ${baseFontSize}px; font-size:${baseFontSize * 1.2}px; background-color:${backgroundColor}; color:${textColor}; border:2px solid ${secondaryColor}; border-radius:${baseFontSize * 0.5}px; margin-bottom:${baseFontSize * 1}px;"
+                  />
+
+                  <div style="display:flex; gap:${baseFontSize}px; margin-bottom:${baseFontSize * 0.5}px;">
+                    <button
+                      type="submit"
+                      id="queryButton"
+                      style="flex:1; padding:${baseFontSize * 0.75}px; font-size:${baseFontSize}px; font-weight:600; color:white; background-color:${primaryColor}; border:none; border-radius:${baseFontSize * 0.5}px; cursor:pointer; transition:opacity 0.2s;"
+                      onmouseover="this.style.opacity='0.9'"
+                      onmouseout="this.style.opacity='1'"
+                    >${escapeHtml(queryButtonText)}</button>
+
+                    <button
+                      type="button"
+                      id="resetButton"
+                      style="flex:1; padding:${baseFontSize * 0.75}px; font-size:${baseFontSize}px; font-weight:600; color:${textColor}; background-color:${secondaryColor}; border:none; border-radius:${baseFontSize * 0.5}px; cursor:pointer; transition:opacity 0.2s;"
+                      onmouseover="this.style.opacity='0.9'"
+                      onmouseout="this.style.opacity='1'"
+                    >重設 Reset</button>
+                  </div>
+                </form>
+
+                <div id="resultArea" style="margin-top:${baseFontSize * 1}px;"></div>
+              </div>
+
+              <div class="text-center" style="margin-top:${baseFontSize * 1.5}px;">
+                <button
+                  id="switchToAdminButton"
+                  style="font-size:${baseFontSize * 0.85}px; color:${secondaryColor}; background:none; border:none; cursor:pointer; text-decoration:underline;"
+                  onmouseover="this.style.color='${primaryColor}'"
+                  onmouseout="this.style.color='${secondaryColor}'"
+                >管理者登入 Admin Login</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPasswordView() {
+      const baseFontSize = config.font_size;
+      const backgroundColor = config.background_color;
+      const surfaceColor = config.surface_color;
+      const textColor = config.text_color;
+      const primaryColor = config.primary_action_color;
+      const secondaryColor = config.secondary_action_color;
+
+      return `
+        <div class="w-full h-full overflow-auto" style="background-color: ${backgroundColor};">
+          <div class="min-h-full flex items-center justify-center p-6">
+            <div class="w-full max-w-md">
+              <div class="fade-in" style="background-color:${surfaceColor}; padding:${baseFontSize * 2}px; border-radius:${baseFontSize * 0.75}px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <h2 style="font-size:${baseFontSize * 1.5}px; color:${textColor}; font-weight:600; margin-bottom:${baseFontSize * 0.5}px; text-align:center;">管理者驗證</h2>
+                <h3 style="font-size:${baseFontSize * 1.1}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 1.5}px; text-align:center; opacity:0.8;">Admin Login</h3>
+
+                <form id="passwordForm">
+                  <label for="passwordInput" style="display:block; font-size:${baseFontSize}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 0.5}px;">密碼 Password</label>
+                  <input
+                    type="password"
+                    id="passwordInput"
+                    placeholder="請輸入管理者密碼"
+                    autocomplete="off"
+                    style="width:100%; padding:${baseFontSize * 0.75}px ${baseFontSize}px; font-size:${baseFontSize}px; background-color:${backgroundColor}; color:${textColor}; border:2px solid ${secondaryColor}; border-radius:${baseFontSize * 0.5}px; margin-bottom:${baseFontSize * 1.5}px;"
+                  />
+
+                  <div style="display:flex; gap:${baseFontSize}px;">
+                    <button
+                      type="button"
+                      id="cancelPasswordButton"
+                      style="flex:1; padding:${baseFontSize * 0.75}px; font-size:${baseFontSize}px; font-weight:600; color:${textColor}; background-color:${secondaryColor}; border:none; border-radius:${baseFontSize * 0.5}px; cursor:pointer; transition:opacity 0.2s;"
+                      onmouseover="this.style.opacity='0.9'"
+                      onmouseout="this.style.opacity='1'"
+                    >取消 Cancel</button>
+
+                    <button
+                      type="submit"
+                      id="verifyPasswordButton"
+                      style="flex:1; padding:${baseFontSize * 0.75}px; font-size:${baseFontSize}px; font-weight:600; color:white; background-color:${primaryColor}; border:none; border-radius:${baseFontSize * 0.5}px; cursor:pointer; transition:opacity 0.2s;"
+                      onmouseover="this.style.opacity='0.9'"
+                      onmouseout="this.style.opacity='1'"
+                    >確認 Confirm</button>
+                  </div>
+                </form>
+
+                <div id="passwordError" style="margin-top:${baseFontSize}px; text-align:center;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAdminView() {
+      const baseFontSize = config.font_size;
+      const backgroundColor = config.background_color;
+      const surfaceColor = config.surface_color;
+      const textColor = config.text_color;
+      const primaryColor = config.primary_action_color;
+      const secondaryColor = config.secondary_action_color;
+      const adminTitle = config.admin_title;
+
+      const employeeList = allEmployeeData.map((emp, idx) => `
+        <div class="employee-item slide-in" style="background-color:${backgroundColor}; padding:${baseFontSize}px; border-radius:${baseFontSize * 0.5}px; margin-bottom:${baseFontSize * 0.75}px; display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-size:${baseFontSize}px; color:${textColor}; font-weight:600;">員工編號 Employee ID: ${escapeHtml(emp.employee_id ?? '')}</div>
+            <div style="font-size:${baseFontSize * 0.85}px; color:${textColor}; opacity:0.8; margin-top:${baseFontSize * 0.25}px;">桌號 Desk Number: ${escapeHtml(emp.desk_number ?? '')}</div>
+          </div>
+          <button
+            class="delete-button"
+            data-index="${idx}"
+            style="padding:${baseFontSize * 0.5}px ${baseFontSize}px; font-size:${baseFontSize * 0.85}px; font-weight:600; color:white; background-color:#ef4444; border:none; border-radius:${baseFontSize * 0.375}px; cursor:pointer; transition:opacity 0.2s;"
+            onmouseover="this.style.opacity='0.9'"
+            onmouseout="this.style.opacity='1'"
+          >刪除 Delete</button>
+        </div>
+      `).join('');
+
+      return `
+        <div class="w-full h-full overflow-auto" style="background-color:${backgroundColor};">
+          <div class="min-h-full p-6">
+            <div class="max-w-4xl mx-auto">
+              <div class="text-center mb-8 fade-in">
+                <h1 style="font-size:${baseFontSize * 2}px; color:${textColor}; font-weight:700; margin-bottom:${baseFontSize * 0.25}px;">${escapeHtml(adminTitle)}</h1>
+                <h2 style="font-size:${baseFontSize * 1.2}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 0.5}px;">Admin Dashboard</h2>
+                <button
+                  id="backToUserButton"
+                  style="font-size:${baseFontSize * 0.85}px; color:${secondaryColor}; background:none; border:none; cursor:pointer; text-decoration:underline; margin-top:${baseFontSize * 0.5}px;"
+                  onmouseover="this.style.color='${primaryColor}'"
+                  onmouseout="this.style.color='${secondaryColor}'"
+                >返回查詢頁面 Back to Query</button>
+              </div>
+
+              <div class="slide-in" style="background-color:${surfaceColor}; padding:${baseFontSize * 2}px; border-radius:${baseFontSize * 0.75}px; box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:${baseFontSize * 2}px;">
+                <h2 style="font-size:${baseFontSize * 1.5}px; color:${textColor}; font-weight:600; margin-bottom:${baseFontSize * 0.5}px;">批次匯入 Excel</h2>
+                <h3 style="font-size:${baseFontSize * 1}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 1.5}px; opacity:0.8;">Import from Excel</h3>
+
+                <div style="background-color:${backgroundColor}; padding:${baseFontSize}px; border-radius:${baseFontSize * 0.5}px; margin-bottom:${baseFontSize * 1.5}px;">
+                  <p style="font-size:${baseFontSize * 0.9}px; color:${textColor}; opacity:0.8; margin-bottom:${baseFontSize * 0.5}px;">支援欄位 Supported columns:</p>
+                  <ul style="font-size:${baseFontSize * 0.9}px; color:${textColor}; opacity:0.8; padding-left:${baseFontSize * 1.5}px;">
+                    <li>「員工編號」或 "Employee ID"</li>
+                    <li>「桌號」或 "Desk Number"</li>
+                  </ul>
+                  <p style="font-size:${baseFontSize * 0.85}px; color:#ef4444; margin-top:${baseFontSize * 0.5}px; font-weight:600;">
+                    ⚠️ 匯入會清空現有資料並完全取代 (最多999筆)<br>
+                    Import will replace all existing data (max 999 records)
+                  </p>
+                </div>
+
+                <input type="file" id="excelFileInput" accept=".xlsx,.xls" style="display:none;" />
+                <button
+                  id="uploadExcelButton"
+                  style="width:100%; padding:${baseFontSize * 0.75}px; font-size:${baseFontSize}px; font-weight:600; color:white; background-color:${primaryColor}; border:none; border-radius:${baseFontSize * 0.5}px; cursor:pointer; transition:opacity 0.2s; margin-bottom:${baseFontSize}px;"
+                  onmouseover="this.style.opacity='0.9'"
+                  onmouseout="this.style.opacity='1'"
+                >選擇 Excel 檔案 Choose Excel File</button>
+
+                <div id="uploadMessage" style="text-align:center;"></div>
+              </div>
+
+              <div class="slide-in" style="background-color:${surfaceColor}; padding:${baseFontSize * 2}px; border-radius:${baseFontSize * 0.75}px; box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:${baseFontSize * 2}px;">
+                <h2 style="font-size:${baseFontSize * 1.5}px; color:${textColor}; font-weight:600; margin-bottom:${baseFontSize * 0.5}px;">手動新增</h2>
+                <h3 style="font-size:${baseFontSize * 1}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 1.5}px; opacity:0.8;">Manual Entry</h3>
+
+                <form id="addEmployeeForm">
+                  <div style="margin-bottom:${baseFontSize}px;">
+                    <label for="newEmployeeId" style="display:block; font-size:${baseFontSize}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 0.5}px;">員工編號 Employee ID</label>
+                    <input
+                      type="text"
+                      id="newEmployeeId"
+                      placeholder="例 e.g.: 1234567"
+                      autocomplete="off"
+                      style="width:100%; padding:${baseFontSize * 0.75}px ${baseFontSize}px; font-size:${baseFontSize}px; background-color:${backgroundColor}; color:${textColor}; border:2px solid ${secondaryColor}; border-radius:${baseFontSize * 0.5}px;"
+                    />
+                  </div>
+
+                  <div style="margin-bottom:${baseFontSize * 1.5}px;">
+                    <label for="newDeskNumber" style="display:block; font-size:${baseFontSize}px; color:${textColor}; font-weight:500; margin-bottom:${baseFontSize * 0.5}px;">桌號 Desk Number</label>
+                    <input
+                      type="text"
+                      id="newDeskNumber"
+                      placeholder="例 e.g.: A-01"
+                      autocomplete="off"
+                      style="width:100%; padding:${baseFontSize * 0.75}px ${baseFontSize}px; font-size:${baseFontSize}px; background-color:${backgroundColor}; color:${textColor}; border:2px solid ${secondaryColor}; border-radius:${baseFontSize * 0.5}px;"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    id="addButton"
+                    style="width:100%; padding:${baseFontSize * 0.75}px; font-size:${baseFontSize}px; font-weight:600; color:white; background-color:${primaryColor}; border:none; border-radius:${baseFontSize * 0.5}px; cursor:pointer; transition:opacity 0.2s;"
+                    onmouseover="this.style.opacity='0.9'"
+                    onmouseout="this.style.opacity='1'"
+                  >新增 Add</button>
+                </form>
+
+                <div id="addMessage" style="margin-top:${baseFontSize}px; text-align:center;"></div>
+              </div>
+
+              <div style="background-color:${surfaceColor}; padding:${baseFontSize * 2}px; border-radius:${baseFontSize * 0.75}px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <h2 style="font-size:${baseFontSize * 1.5}px; color:${textColor}; font-weight:600; margin-bottom:${baseFontSize * 0.5}px;">
+                  目前資料 Current Data (${allEmployeeData.length}/999)
+                </h2>
+
+                <div id="employeeList">
+                  ${allEmployeeData.length === 0 ? `
+                    <div style="text-align:center; padding:${baseFontSize * 2}px; color:${textColor}; opacity:0.6; font-size:${baseFontSize}px;">
+                      尚無資料，請新增第一筆員工座位資訊<br>
+                      No data, please add employee data
+                    </div>
+                  ` : employeeList}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function attachEventListeners() {
+      const queryForm = document.getElementById('queryForm');
+      const employeeIdInput = document.getElementById('employeeIdInput');
+      const resetButton = document.getElementById('resetButton');
+      const passwordForm = document.getElementById('passwordForm');
+      const addEmployeeForm = document.getElementById('addEmployeeForm');
+      const switchToAdminButton = document.getElementById('switchToAdminButton');
+      const backToUserButton = document.getElementById('backToUserButton');
+      const cancelPasswordButton = document.getElementById('cancelPasswordButton');
+      const uploadExcelButton = document.getElementById('uploadExcelButton');
+      const excelFileInput = document.getElementById('excelFileInput');
+      const deleteButtons = document.querySelectorAll('.delete-button');
+
+      if (queryForm) {
+        queryForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          handleQuery();
+        });
+      }
+
+      if (employeeIdInput) {
+        employeeIdInput.addEventListener('input', (e) => {
+          // 只保留數字，最多7位
+          let value = e.target.value.replace(/[^0-9]/g, '');
+          if (value.length > 7) {
+            value = value.slice(0, 7);
+          }
+          e.target.value = value;
+        });
+      }
+
+      if (resetButton) {
+        resetButton.addEventListener('click', () => {
+          const input = document.getElementById('employeeIdInput');
+          if (input) input.value = '';
+          clearQueryResult();
+          if (input) input.focus();
+        });
+      }
+
+      if (passwordForm) {
+        passwordForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          handlePasswordVerify();
+        });
+      }
+
+      if (addEmployeeForm) {
+        addEmployeeForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          handleAddEmployee();
+        });
+      }
+
+      if (switchToAdminButton) {
+        switchToAdminButton.addEventListener('click', () => {
+          currentView = 'password';
+          renderCurrentView();
+        });
+      }
+
+      if (backToUserButton) {
+        backToUserButton.addEventListener('click', () => {
+          currentView = 'user';
+          renderCurrentView();
+        });
+      }
+
+      if (cancelPasswordButton) {
+        cancelPasswordButton.addEventListener('click', () => {
+          currentView = 'user';
+          renderCurrentView();
+        });
+      }
+
+      if (uploadExcelButton && excelFileInput) {
+        uploadExcelButton.addEventListener('click', () => excelFileInput.click());
+        excelFileInput.addEventListener('change', (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (file) {
+            handleExcelUpload(file);
+            excelFileInput.value = '';
+          }
+        });
+      }
+
+      deleteButtons.forEach(button => {
+        button.addEventListener('click', () => {
+          const index = parseInt(button.getAttribute('data-index'));
+          handleDelete(index);
+        });
+      });
+    }
+
+    function handleQuery() {
+      const input = document.getElementById('employeeIdInput');
+      const resultArea = document.getElementById('resultArea');
+      const queryButton = document.getElementById('queryButton');
+
+      const baseFontSize = config.font_size;
+      const textColor = config.text_color;
+      const primaryColor = config.primary_action_color;
+
+      const employeeId = (input?.value || '').trim();
+      if (!employeeId) return;
+
+      clearQueryResult();
+
+      const queryButtonText = config.query_button_text;
+      queryButton.disabled = true;
+      queryButton.textContent = '查詢中 Searching...';
+
+      const employee = allEmployeeData.find(emp => String(emp.employee_id) === employeeId);
+
+      setTimeout(() => {
+        if (employee) {
+          resultArea.innerHTML = `
+            <div class="fade-in" style="background-color:${primaryColor}20; padding:${baseFontSize * 1.5}px; border-radius:${baseFontSize * 0.5}px; border-left:4px solid ${primaryColor};">
+              <div style="font-size:${baseFontSize * 1.2}px; color:${textColor}; font-weight:600; margin-bottom:${baseFontSize * 0.5}px;">查詢成功！Query Success!</div>
+              <div style="font-size:${baseFontSize}px; color:${textColor};">
+                員工編號 Employee ID <strong>${escapeHtml(employee.employee_id)}</strong> 的座位是：<br>
+                Desk Number: <strong style="font-size:${baseFontSize * 1.5}px; color:${primaryColor};">${escapeHtml(employee.desk_number)}</strong>
+              </div>
+            </div>
+          `;
+        } else {
+          resultArea.innerHTML = `
+            <div class="fade-in" style="background-color:#ef444420; padding:${baseFontSize * 1.5}px; border-radius:${baseFontSize * 0.5}px; border-left:4px solid #ef4444;">
+              <div style="font-size:${baseFontSize}px; color:${textColor};">
+                找不到員工編號 <strong>${escapeHtml(employeeId)}</strong> 的座位資訊<br>
+                Employee ID not found
+              </div>
+            </div>
+          `;
+        }
+
+        queryButton.disabled = false;
+        queryButton.textContent = queryButtonText;
+
+        resultAutoClearTimer = setTimeout(() => {
+          clearQueryResult();
+        }, 3000);
+
+      }, 300);
+    }
+
+    function handlePasswordVerify() {
+      const passwordInput = document.getElementById('passwordInput');
+      const passwordError = document.getElementById('passwordError');
+      const baseFontSize = config.font_size;
+
+      const password = passwordInput.value || '';
+
+      if (password === ADMIN_PASSWORD) {
+        currentView = 'admin';
+        renderCurrentView();
+        return;
+      }
+
+      passwordError.innerHTML = `
+        <div class="fade-in" style="font-size:${baseFontSize * 0.9}px; color:#ef4444;">
+          密碼錯誤，請重試<br>Incorrect password, please try again
+        </div>
+      `;
+      passwordInput.value = '';
+      setTimeout(() => { passwordError.innerHTML = ''; }, 3000);
+    }
+
+    function handleAddEmployee() {
+      if (allEmployeeData.length >= 999) {
+        showAddMessage('已達到最大資料筆數限制 (999筆)<br>Maximum limit reached (999 records)', false);
+        return;
+      }
+
+      const employeeIdInput = document.getElementById('newEmployeeId');
+      const deskNumberInput = document.getElementById('newDeskNumber');
+      const addButton = document.getElementById('addButton');
+
+      const employeeId = (employeeIdInput.value || '').trim();
+      const deskNumber = (deskNumberInput.value || '').trim();
+
+      if (!employeeId || !deskNumber) return;
+
+      const exists = allEmployeeData.some(emp => String(emp.employee_id) === employeeId);
+      if (exists) {
+        showAddMessage('此員工編號已存在<br>This employee ID already exists', false);
+        return;
+      }
+
+      addButton.disabled = true;
+      addButton.textContent = '新增中 Adding...';
+
+      allEmployeeData.push({
+        employee_id: employeeId,
+        desk_number: deskNumber,
+        created_at: new Date().toISOString()
+      });
+
+      saveData();
+
+      employeeIdInput.value = '';
+      deskNumberInput.value = '';
+      showAddMessage('新增成功！<br>Added successfully!', true);
+
+      addButton.disabled = false;
+      addButton.textContent = '新增 Add';
+
+      renderCurrentView();
+    }
+
+    function handleDelete(index) {
+      if (confirm('確定要刪除此筆資料？\nConfirm delete?')) {
+        allEmployeeData.splice(index, 1);
+        saveData();
+        renderCurrentView();
+      }
+    }
+
+    function showAddMessage(message, isSuccess) {
+      const addMessage = document.getElementById('addMessage');
+      const baseFontSize = config.font_size;
+      const color = isSuccess ? '#10b981' : '#ef4444';
+
+      addMessage.innerHTML = `
+        <div class="fade-in" style="font-size:${baseFontSize * 0.9}px; color:${color};">
+          ${message}
+        </div>
+      `;
+
+      setTimeout(() => { addMessage.innerHTML = ''; }, 3000);
+    }
+
+    function showUploadMessage(message, isSuccess) {
+      const uploadMessage = document.getElementById('uploadMessage');
+      const baseFontSize = config.font_size;
+      const color = isSuccess ? '#10b981' : '#ef4444';
+
+      uploadMessage.innerHTML = `
+        <div class="fade-in" style="font-size:${baseFontSize * 0.9}px; color:${color}; margin-top:${baseFontSize}px;">
+          ${message}
+        </div>
+      `;
+
+      setTimeout(() => { uploadMessage.innerHTML = ''; }, 5000);
+    }
+
+    function handleExcelUpload(file) {
+      const uploadButton = document.getElementById('uploadExcelButton');
+      const ok = confirm('匯入會清空現有資料並完全取代，確定要繼續嗎？\nImport will replace all existing data. Continue?');
+      if (!ok) return;
+
+      uploadButton.disabled = true;
+      uploadButton.textContent = '處理中 Processing...';
+
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+
+          if (!jsonData || jsonData.length === 0) {
+            showUploadMessage('Excel 檔案中沒有資料<br>No data in Excel file', false);
+            uploadButton.disabled = false;
+            uploadButton.textContent = '選擇 Excel 檔案 Choose Excel File';
+            return;
+          }
+
+          if (jsonData.length > 999) {
+            showUploadMessage(`Excel 檔案包含 ${jsonData.length} 筆資料，超過最大限制 999 筆<br>Excel contains ${jsonData.length} records, exceeds maximum limit 999`, false);
+            uploadButton.disabled = false;
+            uploadButton.textContent = '選擇 Excel 檔案 Choose Excel File';
+            return;
+          }
+
+          const normalized = [];
+          for (const row of jsonData) {
+            const employeeId = (row['員工編號'] || row['员工编号'] || row['Employee ID'] || row['employee_id'] || '').toString().trim();
+            const deskNumber = (row['桌號'] || row['桌号'] || row['Desk Number'] || row['desk_number'] || '').toString().trim();
+            if (employeeId && deskNumber) {
+              normalized.push({ 
+                employee_id: employeeId, 
+                desk_number: deskNumber,
+                created_at: new Date().toISOString()
+              });
+            }
+          }
+
+          if (normalized.length === 0) {
+            showUploadMessage('沒有可匯入的有效資料（請確認欄位名稱與內容）<br>No valid data to import (please check column names)', false);
+            uploadButton.disabled = false;
+            uploadButton.textContent = '選擇 Excel 檔案 Choose Excel File';
+            return;
+          }
+
+          if (normalized.length > 999) {
+            showUploadMessage(`有效資料 ${normalized.length} 筆，超過最大限制 999 筆<br>Valid data ${normalized.length} records, exceeds maximum limit 999`, false);
+            uploadButton.disabled = false;
+            uploadButton.textContent = '選擇 Excel 檔案 Choose Excel File';
+            return;
+          }
+
+          // 完全取代現有資料
+          allEmployeeData = normalized;
+          saveData();
+          renderCurrentView();
+
+          showUploadMessage(`完成匯入！成功匯入 ${normalized.length} 筆資料<br>Import completed! Successfully imported ${normalized.length} records`, true);
+
+        } catch (error) {
+          console.error(error);
+          showUploadMessage('匯入失敗：檔案解析錯誤，請確認格式正確<br>Import failed: file parsing error', false);
+        } finally {
+          uploadButton.disabled = false;
+          uploadButton.textContent = '選擇 Excel 檔案 Choose Excel File';
+        }
+      };
+
+      reader.onerror = () => {
+        showUploadMessage('匯入失敗：檔案讀取錯誤，請重試<br>Import failed: file read error', false);
+        uploadButton.disabled = false;
+        uploadButton.textContent = '選擇 Excel 檔案 Choose Excel File';
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    init();
+  </script>
+</body>
+</html>
