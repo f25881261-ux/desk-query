@@ -1,9 +1,9 @@
-<!doctype html>
+<!doctype html> 
 <html lang="zh-TW" class="h-full">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>員工桌號查詢 <br> Employee Table Lookup</title>
+  <title>員工桌號查詢 | Table Lookup</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap">
@@ -42,7 +42,8 @@
       primary: '#3b82f6',
       secondary: '#64748b',
       font: 14,
-      title: '員工桌號查詢 Employee Table Lookup'
+      // ✅ 兩行標題（HTML）
+      title: '員工桌號查詢<br><span style="font-size:0.75em;font-weight:500;opacity:.85">Employee Table Lookup</span>'
     };
 
     let data = [];
@@ -97,7 +98,6 @@
 
       const csv = await res.text();
       const lines = csv.split(/\r?\n/).filter(l => l.trim());
-
       if (lines.length < 2) return [];
 
       const headers = parseCsvLine(lines[0]);
@@ -157,7 +157,8 @@
         <div class="min-h-full flex items-center justify-center p-6" style="background:${config.bg};color:${config.text}">
           <div class="w-full max-w-md">
             <div class="text-center mb-6">
-              <h1 style="font-size:${f*2}px;font-weight:700">${escapeHtml(config.title)}</h1>
+              <!-- ✅ 關鍵：title 不要 escape，讓 <br> / <span> 生效 -->
+              <h1 style="font-size:${f*2}px;font-weight:700">${config.title}</h1>
             </div>
 
             <div class="p-6 rounded-lg" style="background:${config.card}">
