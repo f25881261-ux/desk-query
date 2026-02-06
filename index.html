@@ -27,10 +27,11 @@
 
   <script>
     // ============================================================
-    // ✅ Google Sheet 設定（已幫你填好）
+    // ✅ 方案 A：Google Sheet 發佈成 CSV（最穩）
+    // 你提供的連結已填入，不用再改
     // ============================================================
-    const GOOGLE_SHEET_ID = "1GDtxQPMryH3_q998dz4p4oZA8kuz8And1RwwakbvjYA";
-    const GOOGLE_SHEET_TAB_NAME = "總表"; // ✅ 你的分頁名稱
+    const PUBLISHED_CSV_URL =
+      "https://docs.google.com/spreadsheets/d/e/2PACX-1vRHlG9WMRmD7yKNT3sOFSxmI4QWPI-kz8pGXKRoNxuVDMajS9RT4JWCT-s0sbcPDoBECq4tTGbVeNcd/pub?gid=1865948020&single=true&output=csv";
 
     // ============================================================
     // UI 設定
@@ -61,80 +62,86 @@
         .replaceAll("'","&#39;");
     }
 
-    function sheetUrl() {
-      let base = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(GOOGLE_SHEET_ID)}/gviz/tq?tqx=out:json`;
-      if (GOOGLE_SHEET_TAB_NAME && GOOGLE_SHEET_TAB_NAME.trim()) {
-        base += `&sheet=${encodeURIComponent(GOOGLE_SHEET_TAB_NAME.trim())}`;
+    function csvUrl() {
+      // cache bust：避免任何快取
+      return PUBLISHED_CSV_URL + (PUBLISHED_CSV_URL.includes('?') ? '&' : '?') + `_=${Date.now()}`;
+    }
+
+    // 簡易 CSV parser（支援引號與逗號）
+    function parseCsvLine(line) {
+      const out = [];
+      let cur = '', inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+          else inQ = !inQ;
+        } else if (ch === ',' && !inQ) {
+          out.push(cur); cur = '';
+        } else {
+          cur += ch;
+        }
       }
-      // cache bust，避免手機/中間層快取
-      return base + `&_=${Date.now()}`;
+      out.push(cur);
+      return out.map(s => s.trim());
     }
 
-    function normalizeRow(cols, row) {
-      const obj = {};
-      (row.c || []).forEach((cell, i) => {
-        obj[cols[i] || `col_${i}`] = (cell && cell.v != null) ? cell.v : '';
-      });
-
-      const employee_id = String(obj.employee_id || obj['Employee ID'] || obj['員工編號'] || obj['员工编号'] || '').trim();
-      const desk_number = String(obj.desk_number || obj['Desk Number'] || obj['桌號'] || obj['桌号'] || '').trim();
-
-      if (!employee_id || !desk_number) return null;
-      return { employee_id, desk_number };
+    function findHeaderIndex(headers, candidates) {
+      // candidates: 可能的欄名集合（大小寫不敏感）
+      const lower = headers.map(h => String(h || '').trim().toLowerCase());
+      for (const cand of candidates) {
+        const idx = lower.indexOf(String(cand).toLowerCase());
+        if (idx >= 0) return idx;
+      }
+      return -1;
     }
 
-    async function fetchSheetData() {
-      const url = sheetUrl();
+    async function fetchSheetDataFromCsv() {
+      const url = csvUrl();
       const res = await fetch(url, { cache: 'no-store' });
 
-      // 若不是 2xx，直接丟出更清楚的錯誤
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status} ${res.statusText}（無法讀取 Google Sheet）`);
+        throw new Error(`HTTP ${res.status} ${res.statusText}（無法讀取 CSV）`);
       }
 
-      const text = await res.text();
+      const csv = await res.text();
+      const lines = csv.split(/\r?\n/).filter(line => line.trim().length > 0);
 
-      // gviz 回傳不是純 JSON，要截取 {...}
-      const start = text.indexOf('{');
-      const end = text.lastIndexOf('}');
-      if (start === -1 || end === -1) {
-        throw new Error('回傳內容不是預期的 JSON（可能需要登入或權限不足）');
+      if (lines.length < 2) return [];
+
+      const headers = parseCsvLine(lines[0]);
+      // 支援欄名：employee_id / desk_number 或 員工編號 / 桌號
+      const idxEmp = findHeaderIndex(headers, ['employee_id', 'employee id', '員工編號', '员工编号']);
+      const idxDesk = findHeaderIndex(headers, ['desk_number', 'desk number', '桌號', '桌号']);
+
+      // 若找不到欄名：預設 A/B 欄（0/1）
+      const empCol = idxEmp >= 0 ? idxEmp : 0;
+      const deskCol = idxDesk >= 0 ? idxDesk : 1;
+
+      const data = [];
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseCsvLine(lines[i]);
+        const employee_id = String(cols[empCol] ?? '').trim();
+        const desk_number = String(cols[deskCol] ?? '').trim();
+        if (employee_id && desk_number) data.push({ employee_id, desk_number });
       }
 
-      let json;
-      try {
-        json = JSON.parse(text.substring(start, end + 1));
-      } catch (e) {
-        throw new Error('JSON 解析失敗（可能是權限/回傳格式異常）');
-      }
-
-      const table = json.table || {};
-      const cols = (table.cols || []).map(c => (c.label || '').trim());
-      const rows = table.rows || [];
-
-      const normalized = [];
-      for (const r of rows) {
-        const item = normalizeRow(cols, r);
-        if (item) normalized.push(item);
-      }
-
-      // 去重：同 employee_id 保留第一筆
+      // 去重 + 限制 999
       const seen = new Set();
-      let data = normalized.filter(x => {
-        const key = String(x.employee_id);
-        if (seen.has(key)) return false;
+      const dedup = [];
+      for (const r of data) {
+        const key = String(r.employee_id);
+        if (seen.has(key)) continue;
         seen.add(key);
-        return true;
-      });
+        dedup.push(r);
+        if (dedup.length >= 999) break;
+      }
 
-      // 限制最多 999
-      if (data.length > 999) data = data.slice(0, 999);
-
-      return data;
+      return dedup;
     }
 
     async function loadDataInitial() {
-      allEmployeeData = await fetchSheetData();
+      allEmployeeData = await fetchSheetDataFromCsv();
       lastLoadedAt = new Date();
       isLoading = false;
       render();
@@ -144,14 +151,13 @@
       if (isLoading || isReloading) return;
 
       isReloading = true;
-      render(); // 先讓按鈕變成載入中
+      render();
       try {
-        allEmployeeData = await fetchSheetData();
+        allEmployeeData = await fetchSheetDataFromCsv();
         lastLoadedAt = new Date();
         showMessage(`已重新載入資料（${allEmployeeData.length} 筆）`, true);
       } catch (err) {
         console.error(err);
-        // ✅ 重新載入失敗：顯示更具體錯誤
         showMessage(`重新載入失敗：${err?.message || String(err)}`, false);
       } finally {
         isReloading = false;
@@ -174,7 +180,7 @@
           <div style="opacity:0.9;">${escapeHtml(text)}</div>
         </div>
       `;
-      msgTimer = setTimeout(() => { el.innerHTML = ''; }, isSuccess ? 2000 : 4500);
+      msgTimer = setTimeout(() => { el.innerHTML = ''; }, isSuccess ? 2000 : 5000);
     }
 
     function clearResult() {
@@ -197,9 +203,8 @@
           <div class="w-full max-w-md">
             <div class="text-center mb-6">
               <h1 style="font-size:${f*2}px;font-weight:700">${escapeHtml(config.app_title)}</h1>
-              <div style="font-size:${f*0.85}px;opacity:.8">資料來源：Google Sheet（全裝置同步）</div>
+              <div style="font-size:${f*0.85}px;opacity:.8">資料來源：Google Sheet（Publish CSV，全裝置同步）</div>
               <div style="font-size:${f*0.78}px;opacity:.7;margin-top:6px">最近載入：${escapeHtml(lastLoadedText)}</div>
-              <div style="font-size:${f*0.78}px;opacity:.65;margin-top:4px">分頁：${escapeHtml(GOOGLE_SHEET_TAB_NAME)}</div>
             </div>
 
             <div class="p-6 rounded-lg" style="background:${config.surface_color}">
@@ -252,10 +257,9 @@
             </div>
 
             <div class="text-center" style="margin-top:${f*0.75}px;font-size:${f*0.72}px;opacity:.55">
-              Debug：如果讀取失敗，請直接在瀏覽器開啟此連結檢查是否需要登入：<br>
-              <span style="word-break:break-all;">${escapeHtml(sheetUrl())}</span>
+              Debug：可直接開啟 CSV 連結檢查是否能看到內容：<br>
+              <span style="word-break:break-all;">${escapeHtml(PUBLISHED_CSV_URL)}</span>
             </div>
-
           </div>
         </div>
       `;
@@ -266,12 +270,14 @@
       const resetBtn = document.getElementById('resetBtn');
       const reloadBtn = document.getElementById('reloadBtn');
 
+      // 只允許數字（最多 7 位）
       input.addEventListener('input', (e) => {
         let v = e.target.value.replace(/[^0-9]/g, '');
         if (v.length > 7) v = v.slice(0, 7);
         e.target.value = v;
       });
 
+      // Enter 直接查詢
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') query();
       });
@@ -334,13 +340,12 @@
       isLoading = false;
       render();
 
-      // ✅ 保險修正版：把真正錯誤訊息顯示在畫面上
       const res = document.getElementById('result');
       if (res) {
         res.innerHTML = `<div class="fade-in" style="padding:12px;border-left:4px solid #ef4444">
-          <div style="font-weight:700;margin-bottom:6px">讀取 Google Sheet 失敗</div>
+          <div style="font-weight:700;margin-bottom:6px">讀取 CSV 失敗</div>
           <div style="opacity:.9;margin-bottom:8px">
-            可能原因：權限、分頁名稱、或網路阻擋（例如公司網路/CORS/隱私設定）
+            可能原因：網路阻擋、隱私外掛、或發佈設定未生效
           </div>
           <div style="opacity:.95">
             <strong>實際錯誤訊息：</strong><br>
@@ -348,9 +353,8 @@
           </div>
           <div style="opacity:.8;margin-top:10px">
             請確認：<br>
-            1) Sheet：任何知道連結的人 → 檢視者<br>
-            2) 分頁名稱：總表（完全一致）<br>
-            3) 直開 Debug 連結能看到 table/rows（不需登入）
+            1) 你提供的 CSV 連結可在瀏覽器直接開啟（能看到內容）<br>
+            2) 若在公司網路被擋，改用手機 4G/5G 再試
           </div>
         </div>`;
       }
