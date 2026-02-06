@@ -27,8 +27,7 @@
 
   <script>
     // ============================================================
-    // ✅ 方案 A：Google Sheet 發佈成 CSV（最穩）
-    // 你提供的連結已填入，不用再改
+    // ✅ Google Sheet（Publish to web → CSV）
     // ============================================================
     const PUBLISHED_CSV_URL =
       "https://docs.google.com/spreadsheets/d/e/2PACX-1vRHlG9WMRmD7yKNT3sOFSxmI4QWPI-kz8pGXKRoNxuVDMajS9RT4JWCT-s0sbcPDoBECq4tTGbVeNcd/pub?gid=1865948020&single=true&output=csv";
@@ -47,8 +46,8 @@
     };
 
     let allEmployeeData = [];
-    let isLoading = true;       // 初次載入
-    let isReloading = false;    // 手動重新載入
+    let isLoading = true;
+    let isReloading = false;
     let autoClearTimer = null;
     let msgTimer = null;
     let lastLoadedAt = null;
@@ -63,11 +62,9 @@
     }
 
     function csvUrl() {
-      // cache bust：避免任何快取
       return PUBLISHED_CSV_URL + (PUBLISHED_CSV_URL.includes('?') ? '&' : '?') + `_=${Date.now()}`;
     }
 
-    // 簡易 CSV parser（支援引號與逗號）
     function parseCsvLine(line) {
       const out = [];
       let cur = '', inQ = false;
@@ -87,7 +84,6 @@
     }
 
     function findHeaderIndex(headers, candidates) {
-      // candidates: 可能的欄名集合（大小寫不敏感）
       const lower = headers.map(h => String(h || '').trim().toLowerCase());
       for (const cand of candidates) {
         const idx = lower.indexOf(String(cand).toLowerCase());
@@ -97,24 +93,18 @@
     }
 
     async function fetchSheetDataFromCsv() {
-      const url = csvUrl();
-      const res = await fetch(url, { cache: 'no-store' });
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} ${res.statusText}（無法讀取 CSV）`);
-      }
+      const res = await fetch(csvUrl(), { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const csv = await res.text();
-      const lines = csv.split(/\r?\n/).filter(line => line.trim().length > 0);
+      const lines = csv.split(/\r?\n/).filter(l => l.trim());
 
       if (lines.length < 2) return [];
 
       const headers = parseCsvLine(lines[0]);
-      // 支援欄名：employee_id / desk_number 或 員工編號 / 桌號
-      const idxEmp = findHeaderIndex(headers, ['employee_id', 'employee id', '員工編號', '员工编号']);
-      const idxDesk = findHeaderIndex(headers, ['desk_number', 'desk number', '桌號', '桌号']);
+      const idxEmp = findHeaderIndex(headers, ['employee_id','employee id','員工編號','员工编号']);
+      const idxDesk = findHeaderIndex(headers, ['desk_number','desk number','桌號','桌号']);
 
-      // 若找不到欄名：預設 A/B 欄（0/1）
       const empCol = idxEmp >= 0 ? idxEmp : 0;
       const deskCol = idxDesk >= 0 ? idxDesk : 1;
 
@@ -126,21 +116,18 @@
         if (employee_id && desk_number) data.push({ employee_id, desk_number });
       }
 
-      // 去重 + 限制 999
       const seen = new Set();
       const dedup = [];
       for (const r of data) {
-        const key = String(r.employee_id);
-        if (seen.has(key)) continue;
-        seen.add(key);
+        if (seen.has(r.employee_id)) continue;
+        seen.add(r.employee_id);
         dedup.push(r);
         if (dedup.length >= 999) break;
       }
-
       return dedup;
     }
 
-    async function loadDataInitial() {
+    async function loadInitial() {
       allEmployeeData = await fetchSheetDataFromCsv();
       lastLoadedAt = new Date();
       isLoading = false;
@@ -149,216 +136,113 @@
 
     async function reloadData() {
       if (isLoading || isReloading) return;
-
       isReloading = true;
       render();
       try {
         allEmployeeData = await fetchSheetDataFromCsv();
         lastLoadedAt = new Date();
         showMessage(`已重新載入資料（${allEmployeeData.length} 筆）`, true);
-      } catch (err) {
-        console.error(err);
-        showMessage(`重新載入失敗：${err?.message || String(err)}`, false);
+      } catch (e) {
+        showMessage('重新載入失敗，請稍後再試', false);
       } finally {
         isReloading = false;
         render();
       }
     }
 
-    function showMessage(text, isSuccess) {
+    function showMessage(text, ok) {
       const el = document.getElementById('message');
       if (!el) return;
-
       if (msgTimer) clearTimeout(msgTimer);
-      const color = isSuccess ? '#10b981' : '#ef4444';
-
+      const color = ok ? '#10b981' : '#ef4444';
       el.innerHTML = `
-        <div class="fade-in" style="margin-top:12px; padding:10px 12px; border-left:4px solid ${color}; background:rgba(255,255,255,0.06);">
-          <div style="color:${color}; font-weight:700; margin-bottom:4px;">
-            ${isSuccess ? '完成' : '提醒'}
-          </div>
-          <div style="opacity:0.9;">${escapeHtml(text)}</div>
-        </div>
-      `;
-      msgTimer = setTimeout(() => { el.innerHTML = ''; }, isSuccess ? 2000 : 5000);
-    }
-
-    function clearResult() {
-      const res = document.getElementById('result');
-      if (res) res.innerHTML = '';
-      if (autoClearTimer) {
-        clearTimeout(autoClearTimer);
-        autoClearTimer = null;
-      }
+        <div class="fade-in" style="margin-top:12px;padding:10px 12px;border-left:4px solid ${color};background:rgba(255,255,255,.06)">
+          <div style="color:${color};font-weight:700">${ok?'完成':'提醒'}</div>
+          <div>${escapeHtml(text)}</div>
+        </div>`;
+      msgTimer = setTimeout(() => el.innerHTML = '', ok ? 2000 : 4000);
     }
 
     function render() {
       const app = document.getElementById('app');
       const f = config.font_size;
-
-      const lastLoadedText = lastLoadedAt ? lastLoadedAt.toLocaleString() : '尚未載入';
+      const last = lastLoadedAt ? lastLoadedAt.toLocaleString() : '尚未載入';
 
       app.innerHTML = `
         <div class="min-h-full flex items-center justify-center p-6" style="background:${config.background_color};color:${config.text_color}">
           <div class="w-full max-w-md">
             <div class="text-center mb-6">
-              <h1 style="font-size:${f*2}px;font-weight:700">${escapeHtml(config.app_title)}</h1>
-              <div style="font-size:${f*0.85}px;opacity:.8">資料來源：Google Sheet（Publish CSV，全裝置同步）</div>
-              <div style="font-size:${f*0.78}px;opacity:.7;margin-top:6px">最近載入：${escapeHtml(lastLoadedText)}</div>
+              <h1 style="font-size:${f*2}px;font-weight:700">${config.app_title}</h1>
+              <div style="font-size:${f*.85}px;opacity:.8">資料來源：Google Sheet（同步）</div>
+              <div style="font-size:${f*.75}px;opacity:.65">最近載入：${last}</div>
             </div>
 
             <div class="p-6 rounded-lg" style="background:${config.surface_color}">
-              <div style="display:flex; gap:${f}px; align-items:center; margin-bottom:${f}px;">
-                <button id="reloadBtn"
-                  style="flex:1;background:${config.secondary_action_color};color:white;padding:${f*0.85}px;border-radius:8px;border:none;cursor:pointer">
-                  ${isReloading ? '載入中… Loading…' : '重新載入資料 Reload'}
+              <div style="display:flex;gap:${f}px;margin-bottom:${f}px">
+                <button id="reloadBtn" style="flex:1;background:${config.secondary_action_color};color:#fff;padding:${f*.85}px;border-radius:8px;border:none">
+                  ${isReloading?'載入中…':'重新載入資料'}
                 </button>
-
-                <div style="flex:1; font-size:${f*0.85}px; opacity:.85; text-align:right;">
+                <div style="flex:1;text-align:right;font-size:${f*.85}px;opacity:.85">
                   目前資料筆數：${allEmployeeData.length}
                 </div>
               </div>
 
-              <input
-                id="eid"
-                type="text"
-                inputmode="numeric"
-                placeholder="請輸入員工編號"
-                style="
-                  width:100%;
-                  padding:${f}px;
-                  border-radius:8px;
-                  border:none;
-                  margin-bottom:${f}px;
-                  font-size:${f*1.1}px;
-                  color:#000000;
-                  background-color:#ffffff;
-                ">
+              <input id="eid" type="text" inputmode="numeric" placeholder="請輸入員工編號"
+                style="width:100%;padding:${f}px;border-radius:8px;border:none;margin-bottom:${f}px;font-size:${f*1.1}px;color:#000;background:#fff">
 
               <div style="display:flex;gap:${f}px">
-                <button id="queryBtn"
-                  style="flex:1;background:${config.primary_action_color};color:white;padding:${f}px;border-radius:8px;border:none;cursor:pointer">
-                  查詢
-                </button>
-                <button id="resetBtn"
-                  style="flex:1;background:${config.secondary_action_color};color:white;padding:${f}px;border-radius:8px;border:none;cursor:pointer">
-                  重設
-                </button>
+                <button id="queryBtn" style="flex:1;background:${config.primary_action_color};color:#fff;padding:${f}px;border-radius:8px;border:none">查詢</button>
+                <button id="resetBtn" style="flex:1;background:${config.secondary_action_color};color:#fff;padding:${f}px;border-radius:8px;border:none">重設</button>
               </div>
 
               <div id="result" style="margin-top:${f}px"></div>
               <div id="message"></div>
-
-              ${isLoading ? `<div class="fade-in" style="margin-top:${f}px;opacity:.75">資料載入中…</div>` : ``}
             </div>
 
-            <div class="text-center" style="margin-top:${f}px;font-size:${f*0.8}px;opacity:.7">
-              管理者請直接編輯 Google Sheet（改完可按「重新載入」同步）
-            </div>
-
-            <div class="text-center" style="margin-top:${f*0.75}px;font-size:${f*0.72}px;opacity:.55">
-              Debug：可直接開啟 CSV 連結檢查是否能看到內容：<br>
-              <span style="word-break:break-all;">${escapeHtml(PUBLISHED_CSV_URL)}</span>
+            <div class="text-center" style="margin-top:${f}px;font-size:${f*.8}px;opacity:.7">
+              管理者請直接編輯 Google Sheet
             </div>
           </div>
-        </div>
-      `;
+        </div>`;
 
-      // 綁定事件（每次 render 都要重綁）
       const input = document.getElementById('eid');
-      const queryBtn = document.getElementById('queryBtn');
-      const resetBtn = document.getElementById('resetBtn');
-      const reloadBtn = document.getElementById('reloadBtn');
+      document.getElementById('reloadBtn').onclick = reloadData;
+      document.getElementById('queryBtn').onclick = query;
+      document.getElementById('resetBtn').onclick = resetQ;
 
-      // 只允許數字（最多 7 位）
-      input.addEventListener('input', (e) => {
-        let v = e.target.value.replace(/[^0-9]/g, '');
-        if (v.length > 7) v = v.slice(0, 7);
+      input.oninput = e => {
+        let v = e.target.value.replace(/\D/g,'');
+        if (v.length > 7) v = v.slice(0,7);
         e.target.value = v;
-      });
-
-      // Enter 直接查詢
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') query();
-      });
-
-      queryBtn.addEventListener('click', () => query());
-      resetBtn.addEventListener('click', () => resetQ());
-      reloadBtn.addEventListener('click', () => reloadData());
+      };
+      input.onkeydown = e => { if (e.key === 'Enter') query(); };
     }
 
     function resetQ() {
       const input = document.getElementById('eid');
       if (input) input.value = '';
-      clearResult();
-      if (msgTimer) {
-        clearTimeout(msgTimer);
-        msgTimer = null;
-      }
-      const msg = document.getElementById('message');
-      if (msg) msg.innerHTML = '';
+      document.getElementById('result').innerHTML = '';
+      document.getElementById('message').innerHTML = '';
       input?.focus();
     }
 
     function query() {
-      const input = document.getElementById('eid');
+      const id = document.getElementById('eid').value.trim();
       const res = document.getElementById('result');
-      if (!input || !res) return;
-
-      const id = input.value.trim();
       if (!id) return;
 
-      if (isLoading) {
-        res.innerHTML = `<div class="fade-in" style="padding:12px;border-left:4px solid ${config.primary_action_color};opacity:.9">
-          資料仍在載入中，請稍後再試
-        </div>`;
-        autoClearTimer = setTimeout(() => res.innerHTML = '', 2000);
-        return;
-      }
-
-      clearTimeout(autoClearTimer);
-
       const found = allEmployeeData.find(r => r.employee_id === id);
-
-      if (found) {
-        res.innerHTML = `<div class="fade-in" style="padding:12px;border-left:4px solid ${config.primary_action_color}">
-          座位：<strong style="font-size:1.4em">${escapeHtml(found.desk_number)}</strong>
-        </div>`;
-      } else {
-        res.innerHTML = `<div class="fade-in" style="padding:12px;border-left:4px solid #ef4444">
-          查無此員工
-        </div>`;
-      }
+      res.innerHTML = found
+        ? `<div class="fade-in" style="padding:12px;border-left:4px solid ${config.primary_action_color}">
+             座位：<strong style="font-size:1.4em">${escapeHtml(found.desk_number)}</strong>
+           </div>`
+        : `<div class="fade-in" style="padding:12px;border-left:4px solid #ef4444">查無此員工</div>`;
 
       autoClearTimer = setTimeout(() => res.innerHTML = '', 3000);
     }
 
-    // init
     render();
-    loadDataInitial().catch(err => {
-      console.error(err);
-      isLoading = false;
-      render();
-
-      const res = document.getElementById('result');
-      if (res) {
-        res.innerHTML = `<div class="fade-in" style="padding:12px;border-left:4px solid #ef4444">
-          <div style="font-weight:700;margin-bottom:6px">讀取 CSV 失敗</div>
-          <div style="opacity:.9;margin-bottom:8px">
-            可能原因：網路阻擋、隱私外掛、或發佈設定未生效
-          </div>
-          <div style="opacity:.95">
-            <strong>實際錯誤訊息：</strong><br>
-            ${escapeHtml(err?.message || String(err))}
-          </div>
-          <div style="opacity:.8;margin-top:10px">
-            請確認：<br>
-            1) 你提供的 CSV 連結可在瀏覽器直接開啟（能看到內容）<br>
-            2) 若在公司網路被擋，改用手機 4G/5G 再試
-          </div>
-        </div>`;
-      }
-    });
+    loadInitial();
   </script>
 </body>
 </html>
