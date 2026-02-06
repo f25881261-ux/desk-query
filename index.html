@@ -234,7 +234,7 @@
       const found = allEmployeeData.find(r => r.employee_id === id);
       res.innerHTML = found
         ? `<div class="fade-in" style="padding:12px;border-left:4px solid ${config.primary_action_color}">
-             座位：<strong style="font-size:1.4em">${escapeHtml(found.desk_number)}</strong>
+             桌號：<strong style="font-size:1.4em">${escapeHtml(found.desk_number)}</strong>
            </div>`
         : `<div class="fade-in" style="padding:12px;border-left:4px solid #ef4444">查無此員工</div>`;
 
